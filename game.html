@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <title>Uniek Browser Spel</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <style>
+        /* CSS voor de spelinterface */
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #1e1e1e;
+            color: #fff;
+            font-family: Arial, sans-serif;
+            touch-action: none; /* Voorkom standaard touch-acties */
+        }
+        #gameCanvas {
+            display: block;
+            margin: 0 auto;
+            background-color: #2b2b2b;
+            border: 2px solid #444;
+        }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+            z-index: 1;
+        }
+        #score, #timer, #level {
+            margin: 5px;
+            font-size: 18px;
+        }
+        #startButton {
+            padding: 10px 20px;
+            font-size: 18px;
+            cursor: pointer;
+        }
+        /* Verbeterde graphics */
+        .button {
+            background-color: #ff5722;
+            border: none;
+            color: white;
+            border-radius: 5px;
+        }
+        .button:hover {
+            background-color: #e64a19;
+        }
+        /* Virtual joystick en springknop */
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 100%;
+            height: 200px;
+            pointer-events: none; /* Laat touch-events door */
+            z-index: 2;
+        }
+        #joystickContainer {
+            position: absolute;
+            left: 20px;
+            bottom: 20px;
+            width: 100px;
+            height: 100px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 50%;
+            pointer-events: auto; /* Activeer touch-events */
+        }
+        #joystick {
+            position: absolute;
+            left: 30px;
+            top: 30px;
+            width: 40px;
+            height: 40px;
+            background: rgba(255, 255, 255, 0.5);
+            border-radius: 50%;
+        }
+        #jumpButton {
+            position: absolute;
+            right: 20px;
+            bottom: 20px;
+            width: 80px;
+            height: 80px;
+            background: rgba(255, 87, 34, 0.8);
+            border-radius: 50%;
+            pointer-events: auto; /* Activeer touch-events */
+        }
+    </style>
+</head>
+<body>
+    <!-- Gebruikersinterface -->
+    <div id="ui">
+        <div id="score">Score: 0</div>
+        <div id="timer">Tijd: 60</div>
+        <div id="level">Niveau: 1</div>
+        <button id="startButton" class="button">Start Spel</button>
+    </div>
+    <!-- Canvas voor het spel -->
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <!-- Touch Controls -->
+    <div id="controls">
+        <div id="joystickContainer">
+            <div id="joystick"></div>
+        </div>
+        <div id="jumpButton"></div>
+    </div>
+    <!-- JavaScript-code -->
+    <script>
+        // Variabelen voor het canvas en context
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // UI-elementen
+        const scoreDisplay = document.getElementById('score');
+        const timerDisplay = document.getElementById('timer');
+        const levelDisplay = document.getElementById('level');
+        const startButton = document.getElementById('startButton');
+
+        // Touch controls
+        const joystickContainer = document.getElementById('joystickContainer');
+        const joystick = document.getElementById('joystick');
+        const jumpButton = document.getElementById('jumpButton');
+
+        // Spelvariabelen
+        let score = 0;
+        let timeLeft = 60;
+        let level = 1;
+        let gameInterval;
+        let timerInterval;
+        let gameRunning = false;
+
+        // Spelerobject
+        const player = {
+            x: 50,
+            y: 550,
+            baseWidth: 30,
+            baseHeight: 50,
+            width: 30,
+            height: 50,
+            speed: 5,
+            vx: 0,
+            vy: 0,
+            jumping: false,
+            wallJumping: false,
+            canWallJump: false,
+            jumpCharge: 0,
+            minJumpCharge: 15,
+            maxJumpCharge: 60,
+            chargeRate: (60 - 15) / (5 * 60), // 5 seconden opladen bij 60fps
+            color: '#0f0'
+        };
+
+        // Level schaal en camera
+        let levelWidth = 800;
+        let levelHeight = 600;
+        let scale = 1;
+
+        // Platformen en puzzels
+        let platforms = [];
+        let puzzles = [];
+
+        // Besturing
+        const keys = {};
+
+        // Touch control variabelen
+        let joystickTouchId = null;
+        let joystickCenter = { x: 0, y: 0 };
+        let joystickInput = { x: 0, y: 0 };
+
+        // Event listeners voor toetsenbord
+        document.addEventListener('keydown', function(e) {
+            keys[e.key] = true;
+        });
+
+        document.addEventListener('keyup', function(e) {
+            keys[e.key] = false;
+            // Reset jump charge als de springknop wordt losgelaten
+            if (e.key === 'ArrowUp' || e.key === 'w') {
+                releaseJump();
+            }
+        });
+
+        // Startknop event listener
+        startButton.addEventListener('click', startGame);
+
+        // Functie om het spel te starten
+        function startGame() {
+            if (gameRunning) return;
+            resetGame();
+            gameRunning = true;
+            startButton.style.display = 'none';
+            gameInterval = requestAnimationFrame(gameLoop);
+            timerInterval = setInterval(updateTimer, 1000);
+        }
+
+        // Functie om het spel te resetten
+        function resetGame() {
+            score = 0;
+            timeLeft = 60;
+            level = 1;
+            player.x = 50;
+            player.y = levelHeight - player.height - 10;
+            player.vx = 0;
+            player.vy = 0;
+            player.jumping = false;
+            player.wallJumping = false;
+            player.canWallJump = false;
+            player.jumpCharge = 0;
+            player.width = player.baseWidth;
+            player.height = player.baseHeight;
+            levelWidth = 800;
+            levelHeight = 600;
+            scale = 1;
+            generateLevel();
+            updateUI();
+        }
+
+        // Functie om de timer bij te werken
+        function updateTimer() {
+            timeLeft--;
+            updateUI();
+            if (timeLeft <= 0) {
+                endGame();
+            }
+        }
+
+        // Functie om de UI bij te werken
+        function updateUI() {
+            scoreDisplay.textContent = 'Score: ' + score;
+            timerDisplay.textContent = 'Tijd: ' + timeLeft;
+            levelDisplay.textContent = 'Niveau: ' + level;
+        }
+
+        // Functie om het spel te beëindigen
+        function endGame() {
+            gameRunning = false;
+            cancelAnimationFrame(gameInterval);
+            clearInterval(timerInterval);
+            startButton.style.display = 'block';
+            alert('Tijd is op! Je score is: ' + score);
+        }
+
+        // Functie om het niveau te genereren
+        function generateLevel() {
+            platforms = [];
+            puzzles = [];
+
+            // Verhoog moeilijkheid door levelgrootte en schaling aan te passen
+            levelWidth = 800 + (level - 1) * 200;
+            levelHeight = 600 + (level - 1) * 100;
+            scale = canvas.width / levelWidth;
+
+            // Voeg platforms toe
+            platforms.push({ x: 0, y: levelHeight - 10, width: levelWidth, height: 10 });
+
+            // Voeg meer platforms en puzzels toe op basis van het niveau
+            for (let i = 0; i < level + 4; i++) {
+                platforms.push({
+                    x: Math.random() * (levelWidth - 100),
+                    y: Math.random() * (levelHeight - 150) + 50,
+                    width: 100 - level * 5 > 30 ? 100 - level * 5 : 30, // Maak platforms kleiner per niveau
+                    height: 10
+                });
+                puzzles.push({
+                    x: Math.random() * (levelWidth - 20),
+                    y: Math.random() * (levelHeight - 70),
+                    width: 20,
+                    height: 20,
+                    solved: false
+                });
+            }
+        }
+
+        // Hoofdfunctie voor de game loop
+        function gameLoop() {
+            update();
+            render();
+            if (gameRunning) {
+                gameInterval = requestAnimationFrame(gameLoop);
+            }
+        }
+
+        // Update functie
+        function update() {
+            // Beweeg speler
+            let moveLeft = keys['ArrowLeft'] || keys['a'] || joystickInput.x < -0.5;
+            let moveRight = keys['ArrowRight'] || keys['d'] || joystickInput.x > 0.5;
+            let jumpKey = keys['ArrowUp'] || keys['w'];
+
+            if (moveLeft) {
+                player.vx = -player.speed;
+            } else if (moveRight) {
+                player.vx = player.speed;
+            } else {
+                player.vx = 0;
+            }
+
+            // Oplaadbare sprong
+            if (jumpKey || jumpButtonPressed) {
+                if (player.jumpCharge < player.maxJumpCharge) {
+                    player.jumpCharge += player.chargeRate;
+                    // Visualiseer opladen door spelerafmetingen aan te passen
+                    const chargeRatio = (player.jumpCharge - player.minJumpCharge) / (player.maxJumpCharge - player.minJumpCharge);
+                    player.width = player.baseWidth + (50 - player.baseWidth) * chargeRatio;
+                    player.height = player.baseHeight - (player.baseHeight - 30) * chargeRatio;
+                }
+            }
+
+            // Zwaartekracht
+            player.vy += 0.8;
+            player.x += player.vx;
+            player.y += player.vy;
+
+            // Begrens speler binnen level
+            if (player.x < 0) {
+                player.x = 0;
+                player.canWallJump = true;
+            } else if (player.x + player.width > levelWidth) {
+                player.x = levelWidth - player.width;
+                player.canWallJump = true;
+            } else {
+                player.canWallJump = false;
+            }
+
+            // Botsingsdetectie met platforms
+            let onGround = false;
+            platforms.forEach(platform => {
+                if (collisionCheck(player, platform)) {
+                    if (player.vy > 0) {
+                        player.y = platform.y - player.height;
+                        player.vy = 0;
+                        player.jumping = false;
+                        onGround = true;
+                    } else if (player.vy < 0) {
+                        player.y = platform.y + platform.height;
+                        player.vy = 0;
+                    }
+                }
+            });
+
+            // Als de speler niet op de grond is en tegen een muur, kan hij wall jumpen
+            if (!onGround && player.canWallJump && !player.jumping) {
+                player.wallJumping = true;
+            } else {
+                player.wallJumping = false;
+            }
+
+            // Wall jump
+            if (player.wallJumping && (jumpKey || jumpButtonPressed) && !player.jumping) {
+                player.vy = -player.minJumpCharge;
+                player.jumping = true;
+                player.wallJumping = false;
+                player.jumpCharge = 0;
+            }
+
+            // Botsingsdetectie met puzzels
+            puzzles.forEach(puzzle => {
+                if (!puzzle.solved && collisionCheck(player, puzzle)) {
+                    puzzle.solved = true;
+                    score += 10;
+                    updateUI();
+                }
+            });
+
+            // Controleer of alle puzzels zijn opgelost
+            if (puzzles.every(puzzle => puzzle.solved)) {
+                level++;
+                timeLeft += 30;
+                generateLevel();
+                updateUI();
+                // Verplaats speler naar startpositie
+                player.x = 50;
+                player.y = levelHeight - player.height - 10;
+            }
+
+            // Speler valt buiten het level
+            if (player.y > levelHeight) {
+                endGame();
+            }
+        }
+
+        // Render functie
+        function render() {
+            // Wis canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            ctx.save();
+            // Schaal zodat het volledige level zichtbaar is
+            ctx.scale(scale, scale);
+
+            // Teken achtergrond
+            ctx.fillStyle = '#303030';
+            ctx.fillRect(0, 0, levelWidth, levelHeight);
+
+            // Teken platforms
+            ctx.fillStyle = '#757575';
+            platforms.forEach(platform => {
+                ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
+            });
+
+            // Teken puzzels
+            puzzles.forEach(puzzle => {
+                if (!puzzle.solved) {
+                    ctx.fillStyle = '#ffeb3b';
+                    ctx.fillRect(puzzle.x, puzzle.y, puzzle.width, puzzle.height);
+                }
+            });
+
+            // Teken speler
+            ctx.fillStyle = player.color;
+            ctx.fillRect(player.x, player.y, player.width, player.height);
+
+            ctx.restore();
+        }
+
+        // Functie voor botsingsdetectie
+        function collisionCheck(rect1, rect2) {
+            return (
+                rect1.x < rect2.x + rect2.width &&
+                rect1.x + rect1.width > rect2.x &&
+                rect1.y < rect2.y + rect2.height &&
+                rect1.y + rect1.height > rect2.y
+            );
+        }
+
+        // Touch controls
+        let jumpButtonPressed = false;
+
+        // Joystick touch events
+        joystickContainer.addEventListener('touchstart', function(e) {
+            e.preventDefault();
+            if (joystickTouchId === null) {
+                const touch = e.changedTouches[0];
+                joystickTouchId = touch.identifier;
+                const rect = joystickContainer.getBoundingClientRect();
+                joystickCenter = {
+                    x: rect.left + rect.width / 2,
+                    y: rect.top + rect.height / 2
+                };
+                updateJoystick(touch);
+            }
+        }, { passive: false });
+
+        joystickContainer.addEventListener('touchmove', function(e) {
+            e.preventDefault();
+            const touch = [...e.changedTouches].find(t => t.identifier === joystickTouchId);
+            if (touch) {
+                updateJoystick(touch);
+            }
+        }, { passive: false });
+
+        joystickContainer.addEventListener('touchend', function(e) {
+            e.preventDefault();
+            const touch = [...e.changedTouches].find(t => t.identifier === joystickTouchId);
+            if (touch) {
+                joystickTouchId = null;
+                joystick.style.left = '30px';
+                joystick.style.top = '30px';
+                joystickInput = { x: 0, y: 0 };
+            }
+        }, { passive: false });
+
+        function updateJoystick(touch) {
+            const dx = touch.clientX - joystickCenter.x;
+            const dy = touch.clientY - joystickCenter.y;
+            const distance = Math.min(Math.sqrt(dx * dx + dy * dy), 40);
+            const angle = Math.atan2(dy, dx);
+            const x = Math.cos(angle) * distance;
+            const y = Math.sin(angle) * distance;
+            joystick.style.left = 30 + x + 'px';
+            joystick.style.top = 30 + y + 'px';
+            joystickInput = { x: x / 40, y: y / 40 };
+        }
+
+        // Jump button touch events
+        jumpButton.addEventListener('touchstart', function(e) {
+            e.preventDefault();
+            jumpButtonPressed = true;
+        }, { passive: false });
+
+        jumpButton.addEventListener('touchend', function(e) {
+            e.preventDefault();
+            jumpButtonPressed = false;
+            releaseJump();
+        }, { passive: false });
+
+        function releaseJump() {
+            if (player.jumping === false) {
+                // Zorg ervoor dat de minimale spronghoogte behouden blijft
+                if (player.jumpCharge < player.minJumpCharge) {
+                    player.jumpCharge = player.minJumpCharge;
+                }
+                player.vy = -player.jumpCharge;
+                player.jumping = true;
+                player.jumpCharge = 0;
+                // Reset spelerafmetingen
+                player.width = player.baseWidth;
+                player.height = player.baseHeight;
+            }
+        }
+
+        // Voorkom touch-events die het scherm scrollen of zoomen
+        document.body.addEventListener('touchmove', function(e) {
+            e.preventDefault();
+        }, { passive: false });
+
+    </script>
+</body>
+</html>
